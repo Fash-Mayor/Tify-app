@@ -632,7 +632,7 @@ export default function App() {
               <View>
                 <Text style={styles.title}>Tify</Text>
                 <Text style={styles.subtitle}>
-                  SpotyDrop • Zero-Transcode .M4A Downloader
+                  Tify • Spotify Downloader
                 </Text>
               </View>
             </View>

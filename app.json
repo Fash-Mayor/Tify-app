@@ -1,7 +1,8 @@
 {
   "expo": {
     "name": "Tify",
-    "slug": "Tify",
+    "slug": "tify",
+    "scheme": "tify",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/logo.png",
@@ -13,7 +14,8 @@
       "backgroundColor": "#090A0F"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.fashmayor.tify"
     },
     "android": {
       "adaptiveIcon": {
@@ -21,11 +23,32 @@
         "backgroundColor": "#090A0F"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.fashmayor.tify"
+      "package": "com.fashmayor.tify",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": false,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "open.spotify.com",
+              "pathPrefix": "/track"
+            },
+            {
+              "scheme": "https",
+              "host": "spotify.link"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
     },
     "web": {
+      "name": "Tify",
+      "shortName": "Tify",
       "favicon": "./assets/logo.png",
       "bundler": "metro"
-    }
+    },
+    "plugins": ["./plugins/withAndroidShareTarget"]
   }
 }
