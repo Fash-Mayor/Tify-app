@@ -29,6 +29,14 @@ const API_BASE_URL = (
 
 const API_KEY = process.env.EXPO_PUBLIC_API_KEY || '';
 
+// Storage key where Android remembers the folder you picked once
+// (e.g. your "Downloads" or "Music" folder), so future downloads
+// save with 1 click and NEVER open the file manager again!
+const ANDROID_SAVED_DIR_FILE =
+  Platform.OS !== 'web' && FileSystem.documentDirectory
+    ? FileSystem.documentDirectory + '.tify_save_dir_uri'
+    : null;
+
 function getApiHeaders() {
   const headers = {};
   if (API_KEY) {
@@ -55,6 +63,77 @@ function toSafeFileName(name) {
   );
 }
 
+/**
+ * Directly save the downloaded file into the user's phone storage on Android
+ * using StorageAccessFramework (remembers the folder after the first time!),
+ * or show the native Save sheet on iOS.
+ */
+async function saveToPhoneStorage(tempFileUri, fileName, mimeType = 'audio/mp4') {
+  if (Platform.OS === 'android' && FileSystem.StorageAccessFramework) {
+    const SAF = FileSystem.StorageAccessFramework;
+    let directoryUri = null;
+
+    // 1. Check if the user already granted a folder (like "Downloads") earlier
+    if (ANDROID_SAVED_DIR_FILE) {
+      try {
+        const info = await FileSystem.getInfoAsync(ANDROID_SAVED_DIR_FILE);
+        if (info.exists) {
+          directoryUri = (await FileSystem.readAsStringAsync(ANDROID_SAVED_DIR_FILE)).trim();
+        }
+      } catch {
+        directoryUri = null;
+      }
+    }
+
+    const writeIntoDir = async (dirUri) => {
+      const base64 = await FileSystem.readAsStringAsync(tempFileUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const destUri = await SAF.createFileAsync(dirUri, fileName, mimeType);
+      await FileSystem.writeAsStringAsync(destUri, base64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      return destUri;
+    };
+
+    // 2. Try writing directly into the remembered folder (zero popups!)
+    if (directoryUri) {
+      try {
+        await writeIntoDir(directoryUri);
+        return { savedDirectly: true };
+      } catch {
+        // Permission was revoked or folder deleted; ask again below
+        directoryUri = null;
+      }
+    }
+
+    // 3. First time only: ask user to pick their Downloads/Music folder once
+    const perm = await SAF.requestDirectoryPermissionsAsync();
+    if (perm.granted && perm.directoryUri) {
+      if (ANDROID_SAVED_DIR_FILE) {
+        try {
+          await FileSystem.writeAsStringAsync(ANDROID_SAVED_DIR_FILE, perm.directoryUri);
+        } catch {
+          // ignore
+        }
+      }
+      await writeIntoDir(perm.directoryUri);
+      return { savedDirectly: true };
+    }
+  }
+
+  // Fallback for iOS (or if Android folder prompt was dismissed)
+  if (await Sharing.isAvailableAsync()) {
+    await Sharing.shareAsync(tempFileUri, {
+      mimeType,
+      dialogTitle: `Save ${fileName}`,
+    });
+    return { savedDirectly: true };
+  }
+
+  return { savedDirectly: false };
+}
+
 export default function App() {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
@@ -66,6 +145,8 @@ export default function App() {
   const [statusMessage, setStatusMessage] = useState('');
   const [progress, setProgress] = useState(0);
   const [currentTrack, setCurrentTrack] = useState(null);
+  // Holds the ready-to-save file on mobile so the user gets an in-app "Save to Phone" button!
+  const [readyTrackFile, setReadyTrackFile] = useState(null);
   const [history, setHistory] = useState([]);
   const [banner, setBanner] = useState(null); // { type: 'error' | 'success' | 'info', text: string }
 
@@ -106,6 +187,7 @@ export default function App() {
       if (!trackId || trackId === lastPreviewedIdRef.current) return;
 
       lastPreviewedIdRef.current = trackId;
+      setReadyTrackFile(null);
       setPreviewLoading(true);
       try {
         const meta = await resolveSpotifyTrackOnDevice(trimmed);
@@ -237,24 +319,13 @@ export default function App() {
       );
     }
 
-    setStep('saving');
-    setProgress(98);
-    setStatusMessage('Opening share sheet...');
-
-    if (await Sharing.isAvailableAsync()) {
-      await Sharing.shareAsync(downloadResult.uri, {
-        mimeType: 'audio/mp4',
-        dialogTitle: `Save ${track.title || 'Audio Track'}`,
-      });
-    }
-
     return { track, fileName: niceName, localUri: downloadResult.uri };
   };
 
   // ============================================================
   // PATH B (Web & Automatic Fallback): Cloud Backend (`tify-api`)
   // ============================================================
-  const deliverBackendFile = async (sessionId, fallbackFileName, track) => {
+  const deliverBackendFile = async (sessionId, fallbackFileName) => {
     const fileUrl = `${API_BASE_URL}/get-file?sessionId=${encodeURIComponent(sessionId)}`;
 
     if (Platform.OS === 'web') {
@@ -302,13 +373,6 @@ export default function App() {
     const downloadResult = await downloadResumable.downloadAsync();
     if (!downloadResult || downloadResult.status !== 200) {
       throw new Error('Failed to save audio file to your device.');
-    }
-
-    if (await Sharing.isAvailableAsync()) {
-      await Sharing.shareAsync(downloadResult.uri, {
-        mimeType: safeName.endsWith('.mp3') ? 'audio/mpeg' : 'audio/mp4',
-        dialogTitle: `Save ${track?.title || 'Audio Track'}`,
-      });
     }
 
     return { localUri: downloadResult.uri, fileName: safeName };
@@ -380,11 +444,31 @@ export default function App() {
     setStatusMessage(
       Platform.OS === 'web'
         ? 'Triggering browser file download...'
-        : 'Saving track to device storage...'
+        : 'Preparing audio file on device...'
     );
 
-    const saved = await deliverBackendFile(sessionId, finalFileName, track);
+    const saved = await deliverBackendFile(sessionId, finalFileName);
     return { track: track || currentTrack, fileName: saved.fileName, localUri: saved.localUri };
+  };
+
+  // ============================================================
+  // In-App "Save to Phone" Prompt Handler (Mobile)
+  // ============================================================
+  const handleSaveToPhone = async (fileObj = readyTrackFile) => {
+    if (!fileObj?.localUri) return;
+    try {
+      const res = await saveToPhoneStorage(
+        fileObj.localUri,
+        fileObj.fileName,
+        fileObj.fileName.endsWith('.mp3') ? 'audio/mpeg' : 'audio/mp4'
+      );
+      if (res.savedDirectly) {
+        setReadyTrackFile((prev) => (prev ? { ...prev, savedToDevice: true } : null));
+        showBanner('success', `Saved "${fileObj.fileName}" directly to your phone!`);
+      }
+    } catch (err) {
+      showBanner('error', err.message || 'Could not save file to folder.');
+    }
   };
 
   // ============================================================
@@ -408,6 +492,7 @@ export default function App() {
     }
 
     setBanner(null);
+    setReadyTrackFile(null);
     setLoading(true);
     setProgress(4);
 
@@ -438,7 +523,7 @@ export default function App() {
       setStatusMessage('Ready!');
 
       const track = result.track;
-      addToHistory({
+      const historyItem = {
         id: track?.id || String(Date.now()),
         title: track?.title || result.fileName,
         artist: track?.artist || 'Spotify Track',
@@ -451,14 +536,25 @@ export default function App() {
           hour: '2-digit',
           minute: '2-digit',
         }),
-      });
+      };
 
-      showBanner(
-        'success',
-        Platform.OS === 'web'
-          ? `Downloaded "${result.fileName}" to your browser downloads!`
-          : `Saved "${result.fileName}"!`
-      );
+      addToHistory(historyItem);
+
+      if (Platform.OS === 'web') {
+        showBanner(
+          'success',
+          `Downloaded "${result.fileName}" to your browser downloads!`
+        );
+      } else {
+        // Show the in-app "Save to Phone" prompt instead of forcefully redirecting to another app!
+        setReadyTrackFile({
+          localUri: result.localUri,
+          fileName: result.fileName,
+          track,
+          savedToDevice: false,
+        });
+      }
+
       setUrl('');
       lastPreviewedIdRef.current = null;
     } catch (err) {
@@ -475,14 +571,12 @@ export default function App() {
 
   const handleHistoryAction = async (item) => {
     if (Platform.OS !== 'web' && item.localUri) {
-      try {
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(item.localUri);
-          return;
-        }
-      } catch {
-        // Fallback to re-downloading if file was cleaned up
-      }
+      await handleSaveToPhone({
+        localUri: item.localUri,
+        fileName: item.fileName,
+        track: item,
+      });
+      return;
     }
     if (item.spotifyUrl) {
       setUrl(item.spotifyUrl);
@@ -498,7 +592,7 @@ export default function App() {
   const STEPS = [
     { key: 'metadata', label: '1. Metadata' },
     { key: 'downloading', label: '2. Extract .M4A' },
-    { key: 'saving', label: '3. Save File' },
+    { key: 'saving', label: '3. Ready' },
   ];
 
   const getStepState = (key) => {
@@ -635,7 +729,7 @@ export default function App() {
             )}
           </View>
 
-          {/* Live Track Metadata & Progress Card */}
+          {/* Live Track Metadata, Progress & In-App Save Prompt Card */}
           {(loading || previewLoading || currentTrack) && (
             <View style={styles.trackCard}>
               {currentTrack ? (
@@ -681,7 +775,7 @@ export default function App() {
                 </View>
               )}
 
-              {/* Stepper & Progress Bar */}
+              {/* Stepper & Progress Bar while downloading */}
               {loading && (
                 <View style={styles.progressSection}>
                   <View style={styles.stepsRow}>
@@ -720,6 +814,52 @@ export default function App() {
                   <View style={styles.statusRow}>
                     <Text style={styles.statusText}>{statusMessage}</Text>
                     <Text style={styles.percentText}>{progress}%</Text>
+                  </View>
+                </View>
+              )}
+
+              {/* In-App Save Prompt on Mobile once download finishes */}
+              {!loading && readyTrackFile && Platform.OS !== 'web' && (
+                <View style={styles.savePromptBox}>
+                  <View style={styles.savePromptHeader}>
+                    <Text style={styles.savePromptCheck}>✓</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.savePromptTitle}>
+                        {readyTrackFile.savedToDevice
+                          ? 'Saved to your phone!'
+                          : 'Audio Ready to Save'}
+                      </Text>
+                      <Text style={styles.savePromptSub} numberOfLines={1}>
+                        {readyTrackFile.fileName}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.savePromptActions}>
+                    <TouchableOpacity
+                      style={styles.savePrimaryBtn}
+                      onPress={() => handleSaveToPhone(readyTrackFile)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.savePrimaryBtnText}>
+                        {readyTrackFile.savedToDevice
+                          ? '✓ Saved (Tap to Save Copy)'
+                          : '⬇ Save to Phone'}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.shareSecondaryBtn}
+                      onPress={async () => {
+                        if (await Sharing.isAvailableAsync()) {
+                          await Sharing.shareAsync(readyTrackFile.localUri, {
+                            mimeType: 'audio/mp4',
+                          });
+                        }
+                      }}
+                    >
+                      <Text style={styles.shareSecondaryBtnText}>Share</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
               )}
@@ -763,7 +903,7 @@ export default function App() {
                     onPress={() => handleHistoryAction(item)}
                   >
                     <Text style={styles.historyActionText}>
-                      {Platform.OS === 'web' ? 'Again' : 'Share'}
+                      {Platform.OS === 'web' ? 'Again' : 'Save'}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -1135,6 +1275,70 @@ const styles = StyleSheet.create({
   percentText: {
     color: '#1ED760',
     fontSize: 12,
+    fontWeight: '700',
+  },
+  savePromptBox: {
+    marginTop: 18,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#1C202E',
+  },
+  savePromptHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  savePromptCheck: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(29, 185, 84, 0.18)',
+    color: '#1ED760',
+    textAlign: 'center',
+    lineHeight: 28,
+    fontSize: 14,
+    fontWeight: '800',
+    marginRight: 10,
+  },
+  savePromptTitle: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  savePromptSub: {
+    color: '#8B92A5',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  savePromptActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  savePrimaryBtn: {
+    flex: 1,
+    height: 46,
+    backgroundColor: '#1DB954',
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  savePrimaryBtnText: {
+    color: '#051208',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  shareSecondaryBtn: {
+    height: 46,
+    paddingHorizontal: 16,
+    backgroundColor: '#1B2030',
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shareSecondaryBtnText: {
+    color: '#C3C9D9',
+    fontSize: 13,
     fontWeight: '700',
   },
   historySection: {
