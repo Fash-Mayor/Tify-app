@@ -39,7 +39,10 @@
               "host": "spotify.link"
             }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ]
     },
@@ -49,6 +52,14 @@
       "favicon": "./assets/logo.png",
       "bundler": "metro"
     },
-    "plugins": ["./plugins/withAndroidShareTarget"]
+    "plugins": [
+      "./plugins/withAndroidShareTarget"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "0064f7ee-541f-468b-bee0-3c5909ac5bb5"
+      }
+    },
+    "owner": "fashmayor"
   }
 }

@@ -49,30 +49,30 @@ function withShareSheetMainActivity(config) {
       return cfg;
     }
 
-    // Add Android Intent & Uri imports
+    // Add Android Intent & Uri imports (NOTE: Kotlin does NOT use semicolons
+    // after `package com.fashmayor.tify`, so `;?` must be optional!)
     if (!contents.includes('import android.content.Intent')) {
       contents = contents.replace(
-        /package\s+[\w.]+;\r?\n/,
+        /package\s+[\w.]+;?\r?\n/,
         (match) => `${match}import android.content.Intent\nimport android.net.Uri\n`
       );
     }
 
-    // Inject helper that converts ACTION_SEND EXTRA_TEXT into a VIEW intent
-    // so Expo's Linking.getInitialURL() and Linking.addEventListener('url')
-    // receive the shared Spotify link!
+    // We also use fully-qualified `android.content.Intent` and `android.net.Uri`
+    // inside the injected methods so it compiles cleanly no matter what!
     const helperCode = `
-  private fun handleSpotifyShareIntent(intent: Intent?) {
-    if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
-      val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+  private fun handleSpotifyShareIntent(intent: android.content.Intent?) {
+    if (intent?.action == android.content.Intent.ACTION_SEND && intent.type == "text/plain") {
+      val sharedText = intent.getStringExtra(android.content.Intent.EXTRA_TEXT)
       if (!sharedText.isNullOrBlank()) {
-        val encoded = Uri.encode(sharedText)
-        intent.action = Intent.ACTION_VIEW
-        intent.data = Uri.parse("tify://share?text=" + encoded)
+        val encoded = android.net.Uri.encode(sharedText)
+        intent.action = android.content.Intent.ACTION_VIEW
+        intent.data = android.net.Uri.parse("tify://share?text=" + encoded)
       }
     }
   }
 
-  override fun onNewIntent(intent: Intent) {
+  override fun onNewIntent(intent: android.content.Intent) {
     handleSpotifyShareIntent(intent)
     super.onNewIntent(intent)
   }
