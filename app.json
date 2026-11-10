@@ -43,6 +43,25 @@
             "BROWSABLE",
             "DEFAULT"
           ]
+        },
+        {
+          "action": "VIEW",
+          "autoVerify": false,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "open.spotify.com",
+              "pathPrefix": "/track"
+            },
+            {
+              "scheme": "https",
+              "host": "spotify.link"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ]
     },
@@ -60,6 +79,12 @@
         "projectId": "0064f7ee-541f-468b-bee0-3c5909ac5bb5"
       }
     },
-    "owner": "fashmayor"
+    "owner": "fashmayor",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/0064f7ee-541f-468b-bee0-3c5909ac5bb5"
+    }
   }
 }

@@ -616,14 +616,6 @@ export default function App() {
         <View style={styles.mainWrapper}>
           {/* Header / Branding */}
           <View style={styles.header}>
-            <View style={styles.badgeRow}>
-              <View style={styles.liveDot} />
-              <Text style={styles.badgeText}>
-                {Platform.OS === 'web'
-                  ? 'HYBRID CLOUD .M4A ENGINE'
-                  : 'ON-DEVICE RESIDENTIAL IP ENGINE'}
-              </Text>
-            </View>
 
             <View style={styles.titleRow}>
               <View style={styles.logoCircle}>
